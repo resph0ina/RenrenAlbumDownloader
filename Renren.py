@@ -2,7 +2,6 @@
 # Filename:Renren.py
 # 作者：华亮
 #
-
 from HTMLParser import HTMLParser
 from Queue import Empty, Queue
 from re import match
@@ -11,8 +10,7 @@ import os, re, json, sys
 import threading, time
 import urllib, urllib2, socket
 import shelve
-from pprint import pprint 
-import logging, logging.handlers 
+import logging, logging.handlers
 
 def get_logger(handler = logging.StreamHandler()):
     import logging
@@ -37,14 +35,14 @@ def Str2Uni(str):
     pat = re.compile(r'\\u(\w{4})')
     lst = pat.findall(str)        
     lst.insert(0, '')
-    return reduce(lambda x,y: x + unichr(int(y, 16)), lst)    
+    return reduce(lambda x,y: x + unichr(int(y, 16)), lst)
 
-    
+
 class RenrenRequester:
     '''
     人人访问器
     '''
-    LoginUrl = 'http://www.renren.com/PLogin.do'
+    LoginUrl = 'http://www.renren.com/Login.do'
 
     def CreateByCookie(self, cookie):
         logger.info("Trying to login by cookie")
@@ -73,7 +71,7 @@ class RenrenRequester:
         logger.info("Trying to login by password")
         loginData = {'email':username,
                 'password':password,
-                'origURL':'',
+                'origURL':'http://www.renren.com',
                 'formName':'',
                 'method':'',
                 'isplogin':'true',
@@ -94,16 +92,17 @@ class RenrenRequester:
         result_url = result.geturl()
         logger.info(result_url)
         
-        rawHtml = result.read()        
+        rawHtml = result.read()
+        # print(rawHtml)
 
         # 获取用户id
-        useridPattern = re.compile(r'user : {"id" : (\d+?)}')
+        useridPattern = re.compile(r'\'id\':\'(\d+?)\'')
         try:
-            self.userid = useridPattern.search(rawHtml).group(1)              
+            self.userid = useridPattern.search(rawHtml).group(1)
         except:
+            print('Failed...')
             return False
-        
-        # 查找requestToken        
+        # 查找requestToken
         pos = rawHtml.find("get_check:'")
         if pos == -1: return False        
         rawHtml = rawHtml[pos + 11:]
@@ -200,14 +199,17 @@ class RenrenFriendList:
         人人好友列表
     '''
     def Handler(self, requester, param):     
-        friendUrl = 'http://friend.renren.com/myfriendlistx.do'
+        friendUrl = 'http://friend.renren.com/groupsdata'
         rawHtml, url = requester.Request(friendUrl)
-         
-        friendInfoPack = re.search(r'var friends=\[(.*?)\];', rawHtml).group(1)        
-        friendIdPattern = re.compile(r'"id":(\d+).*?"name":"(.*?)"')
+        # print(rawHtml)
+
+        friendInfoPack = rawHtml
+        # print(friendInfoPack)
+        friendIdPattern = re.compile(r'"fid":(\d+).*?,"fgroups"')
         friendIdList = []
-        for id, name in friendIdPattern.findall(friendInfoPack):
-            friendIdList.append((id, Str2Uni(name)))
+        for id in friendIdPattern.findall(friendInfoPack):
+            friendIdList.append((id, Str2Uni('')))
+            # print(id)
         
         return friendIdList        
     
@@ -272,15 +274,20 @@ class RenrenAlbumDownloader2012:
 
         返回元组列表（相册名，地址）
         '''
-        albumUrlPattern = re.compile(r'''\n</a>\n<a href="(.*?)\?frommyphoto" class="album-title">.*?<span class="album-name">(.*?)</span>''', re.S)
+        # print(rawHtml)
+        albumUrlPattern = re.compile(r'''</div></a>.*?<a href="(.*?)\?frommyphoto" class="album-title">.*?<span class="album-name">(.*?)</span>''', re.S)
 
         albums = []
         for album_url, album_name in albumUrlPattern.findall(rawHtml):
             album_name = album_name.strip()
+            album_name = album_name.replace('<i class="privacy-icon picon-friend"></i>', '')
+            album_name = album_name.replace('<i class="privacy-icon picon-custom"></i>', '')
             if album_name == '<span class="userhead">':
                 album_name = u"头像相册"
             elif album_name == '<span class="phone">':
                 album_name = u"手机相册"
+            elif album_name.startswith('<i class="privacy-icon picon-password"></i>'):
+                continue
             elif album_name == '<span class="password">': # 有密码，跳过
                 continue
             logger.info("album_url: [%s]  album_name: [%s]" % (album_url, album_name))
@@ -324,14 +331,17 @@ class RenrenAlbumDownloader2012:
         self.__EnsureFolder(path)
         
         albumsUrl = "http://photo.renren.com/photo/%s/album/relatives" % userid
+        # print(albumsUrl)
 
         # 打开相册首页，以获取每个相册的地址以及名字
         rawHtml, url = self.requester.Request(albumsUrl)            
         rawHtml = unicode(rawHtml, "utf-8")
+        # print(rawHtml)
 
         # 取得人名
         peopleName = self.__GetPeopleNameFromHtml(rawHtml).strip()
         albums = self.__GetAlbumsNameFromHtml(rawHtml)
+        # print(albums)
 
         # 更新path
         peopleName = self.__NormFilename(peopleName)
@@ -345,13 +355,14 @@ class RenrenAlbumDownloader2012:
         # 构造dict[相册名]=img_urls的字典
         for album_name, album_url in albums:
             logger.info("album_name: %s  album_url: %s" % (album_name, album_url))
-            
+            # print("album_name: %s  album_url: %s" % (album_name, album_url))
+
             album_name = self.__NormFilename(album_name)
             album_img_dict[album_name] = self.__GetImgUrlsInAlbum(album_url)
 
         # 创建文件夹，以及下载任务 
         download_tasks = []
-        for album_name, img_urls in album_img_dict.iteritems(): 
+        for album_name, img_urls in album_img_dict.iteritems():
             album_path = os.path.join(path, album_name)
             logger.info("Create %s if not exists." % album_path)
             self.__EnsureFolder(album_path)

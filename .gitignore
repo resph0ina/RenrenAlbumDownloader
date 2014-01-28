@@ -2,3 +2,5 @@ user.txt
 *.pyc
 TaskList.bin
 *~
+/.idea
+/albums
