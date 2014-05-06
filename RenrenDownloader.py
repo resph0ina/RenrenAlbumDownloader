@@ -27,8 +27,8 @@ def main():
         # renren.PostGroupMsg('387635422', '%s' % time.asctime())
         # renren.DownloadAlbum('333982368', 'sss') 
         # renren.DownloadAlbum('285201751', 'cai')
-        # renren.DownloadAlbum('305263375', 'cai') 
-        renren.DownloadAllFriendsAlbums(threadnumber=100)
+        renren.DownloadAlbum('339106868', 'y:/') 
+#        renren.DownloadAllFriendsAlbums(threadnumber=100)
     
 if __name__ == '__main__':
     main()

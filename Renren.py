@@ -159,13 +159,12 @@ class RenrenPostMsg:
     '''
     RenrenPostMsg
         发布人人状态
-    '''
-    newStatusUrl = 'http://shell.renren.com/322542952/status'
-    #'http://status.renren.com/doing/updateNew.do'
+        '''
     
     def Handle(self, requester, param):
         requestToken, userid, _rtk, msg = param
-
+        newStatusUrl = 'http://shell.renren.com/' + str(userid) + '/status'
+        print newStatusUrl
         statusData = {'content':msg,
                       'hostid':userid,
                     'requestToken':requestToken,
@@ -173,7 +172,7 @@ class RenrenPostMsg:
                       'channel':'renren'}
         postStatusData = urlencode(statusData)
         
-        requester.Request(self.newStatusUrl, statusData)
+        requester.Request(newStatusUrl, statusData)
         
         return True
 
@@ -321,7 +320,7 @@ class RenrenAlbumDownloader2012:
         return filename
 
     def __DownloadOneAlbum(self, userid, path):
-        download_tasks = self.CreateTaskList(userid, path)
+        download_tasks = self.CreateTaskList()
         self.__Download(download_tasks)
 
     def CreateTaskList(self):
