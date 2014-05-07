@@ -23,6 +23,11 @@ def main():
 
     renren = SuperRenren()
     if renren.Create(username, password) or renren.CreateByCookie(cookie):
+		list = renren.GetFriendList()
+		fi=open('y:/1.txt','w')
+		for l in list:
+			fi.write(l[0] + " " + l[1].encode('utf8') + '\n')
+		fi.close()
         # renren.PostMsg(time.asctime())
         # renren.PostGroupMsg('387635422', '%s' % time.asctime())
         # renren.DownloadAlbum('333982368', 'sss') 

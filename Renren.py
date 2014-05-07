@@ -204,10 +204,10 @@ class RenrenFriendList:
 
         friendInfoPack = rawHtml
         # print(friendInfoPack)
-        friendIdPattern = re.compile(r'"fid":(\d+).*?,"fgroups"')
+        friendIdPattern = re.compile(r'"fid":(\d+).*?fgroup.*?,"fname":"(.*?)"')
         friendIdList = []
         for id in friendIdPattern.findall(friendInfoPack):
-            friendIdList.append((id, Str2Uni('')))
+            friendIdList.append((id[0], id[1].decode('unicode-escape')))
             # print(id)
         
         return friendIdList        
