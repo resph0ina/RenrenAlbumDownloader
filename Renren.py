@@ -1,6 +1,5 @@
 # -*- coding:utf-8 -*-
 # Filename:Renren.py
-# 作者：华亮
 #
 from HTMLParser import HTMLParser
 from Queue import Empty, Queue
@@ -26,7 +25,7 @@ GlobalShelveMutex = threading.Lock()
 TaskListFilename = "TaskList.bin"
 
 # 避免urllib2永远不返回
-socket.setdefaulttimeout(30)
+socket.setdefaulttimeout(10)
 
     
 # 字符串形式的unicode转成真正的字符
@@ -212,21 +211,31 @@ class RenrenFriendList:
         
         return friendIdList        
     
-def DownloadImage(img_url, filename):
+
+def DownloadImage(img_url, filename, requester = None):
     count = 0
     # Retry until we get the right picture.
     while True:
         try:
             # 避免过多的重试
             count += 1
-            if count > 5:
+            if count > 3:
                 logger.error("Too many times retry.")
                 break
-
-            n, msg = urllib.urlretrieve(img_url, filename)
-            logger.info(n + " " + str(msg.type))
-            if "image" in msg.type: 
-                break
+            
+            if requester == None:            
+                resp = urllib2.urlopen(img_url); # note: Python 2.6 has added timeout support.            
+            else:
+                resp = requester.opener.open(img_url)
+            respHtml = resp.read();
+            binfile = open(filename+'.'+str(resp.info().getheader("Content-Type").split('/')[1]), "wb");
+            binfile.write(respHtml);
+            binfile.close();
+            break
+            # n, msg = urllib.urlretrieve(img_url, filename)
+            # logger.info(n + " " + str(msg.type))
+            # if "image" in msg.type: 
+            #     break
         except:
             logger.error("Downloading %s is failed." % filename, exc_info=True)
 
@@ -402,6 +411,157 @@ class RenrenAlbumDownloader2012:
         logger.info("All Thread terminated")
 
 
+class RenrenAlbumInfoGrabber:
+    '''提供好友列表的每人的所有相册的概要下载
+    '''
+
+    class DownloaderThread(threading.Thread):
+        def __init__(self, tasks_queue, requester = None):
+            threading.Thread.__init__(self)
+            self.queue = tasks_queue
+            self.requester = requester
+
+        def run(self):
+            try:
+                while not self.queue.empty():
+                    logger.info("Queue size: %d" % self.queue.qsize())
+                    img_url, filename = self.queue.get(block = False)
+
+                    logger.info("Downloading %s." % filename)
+                    DownloadImage(img_url, filename, self.requester)
+            except: 
+                logger.error("Error occured in Downloader.", exc_info=True)
+
+    def __init__(self, requester, userIdList, path, threadnum):
+        self.requester = requester    
+        self.threadnum = threadnum
+        self.userIdList = userIdList
+        self.ownid = requester.GetUserId()
+        self.path = path
+
+    def Handler(self):
+        self.__DownloadAlbums()
+        
+    def __GetPeopleNameFromHtml(self, rawHtml):
+        '''解析html获取人名'''
+        peopleNamePattern = re.compile(r'<title>(.*?)</title>')
+        # 取得人名
+        peopleName = peopleNamePattern.search(rawHtml).group(1).strip()
+        peopleName = peopleName[peopleName.rfind(' ') + 1:]
+        return peopleName
+
+    def __GetAlbumsInfoFromHtml(self, rawHtml):
+        '''获取相册名字以及地址
+        返回元组列表（相册名，相册地址，相册id，照片个数，缩略图网址列表）
+        '''
+        # print(rawHtml)
+        albumUrlPattern = re.compile(r'''<li>(.*?)photo-num.*?([0-9]+).*?</div></a>.*?<a href="(.*?)\?frommyphoto" class="album-title">.*?<span class="album-name">(.*?)</span>''', re.S)
+        thumbnailsPattern = re.compile(r'data-src="(.*?)"')
+        AlbumidPattern = re.compile(r'album-(.*)')
+
+        albums = []
+        for thumbnailHtml, photonums, album_url, album_name in albumUrlPattern.findall(rawHtml):
+            thumbnails = thumbnailsPattern.findall(thumbnailHtml)
+            album_name = album_name.strip()
+            album_name = album_name.replace('<i class="privacy-icon picon-friend"></i>', '')
+            album_name = album_name.replace('<i class="privacy-icon picon-custom"></i>', '')
+            if album_name == '<span class="userhead">':
+                album_name = u"头像相册"
+            elif album_name == '<span class="phone">':
+                album_name = u"手机相册"
+            elif album_name.startswith('<i class="privacy-icon picon-password"></i>'):
+                continue
+            elif album_name == '<span class="password">': # 有密码，跳过
+                continue
+            logger.info("album_url: [%s]  album_name: [%s] num: [%s]" % (album_url, album_name, photonums))
+            albumid = AlbumidPattern.findall(album_url)[0]
+            albums.append((album_name, album_url, albumid, photonums, thumbnails))
+
+        return albums
+
+    def __EnsureFolder(self, path):
+        if os.path.exists(path) == False:
+            os.mkdir(path)
+            return False
+        else:
+            return True
+
+
+    def __NormFilename(self, filename):
+        filename = re.sub(ur"[\t\r\n\\/:：*?<>|]", "", filename)
+        filename = filename.strip(". \n\r")
+        return filename
+
+    def __DownloadAlbums(self):
+        download_tasks = self.CreateTaskList()
+        if len(download_tasks)>0:
+            self.__Download(download_tasks)
+
+    def CreateTaskList(self):
+        userIdList = self.userIdList
+        path = self.path
+        path = path.decode('utf-8')
+        self.__EnsureFolder(path)
+        path = os.path.join(path, self.ownid)
+        path = path.decode('utf-8')
+        self.__EnsureFolder(path)
+        
+        download_tasks = []
+
+        for userid in userIdList:
+            albumsUrl = "http://photo.renren.com/photo/%s/album/relatives" % userid
+            # print(albumsUrl)
+            # 更新path
+            path = os.path.join(path, userid)
+            if self.__EnsureFolder(path) == True:
+                logger.info("Skipping.")
+                return download_tasks
+
+
+            # 打开相册首页，以获取每个相册的地址以及名字
+            rawHtml, url = self.requester.Request(albumsUrl)            
+            rawHtml = unicode(rawHtml, "utf-8")
+            # print(rawHtml)
+
+            albums = self.__GetAlbumsInfoFromHtml(rawHtml)
+            # print(albums)
+
+
+            # 创建文件夹，以及下载任务
+            for name, url, albumid, photos, thumbnails in albums:
+                name = self.__NormFilename(name)
+                album_path = os.path.join(path, albumid + " " + name)
+                self.__EnsureFolder(album_path)
+
+                index = 1
+                for img_url in thumbnails:
+                    name = str(index)
+                    index += 1
+                    filename = os.path.join(album_path, name)
+                    download_tasks.append((img_url, filename))
+
+        logger.info("Download Tasks size: %d." % len(download_tasks))
+
+        return download_tasks
+
+    def __Download(self, downloadTasks): 
+        taskList = Queue()
+        for item in downloadTasks:
+            taskList.put(item)
+
+        # 开始并行下载
+        threads = []
+        for i in xrange(self.threadnum):
+            downloader = self.DownloaderThread(taskList, self.requester)
+            threads.append(downloader)
+            downloader.start()
+
+        for i, t in enumerate(threads):
+            t.join() 
+            # logger.info("Thread %d ended" % i)
+
+        logger.info("All Thread terminated")
+        
 
 class AllFriendAlbumsDownloader:
     '''下载所有好友的相册
@@ -524,6 +684,11 @@ class SuperRenren:
     # 下载相册
     def DownloadAlbum(self, userId, path = 'albums', threadnum=20):       
         downloader = RenrenAlbumDownloader2012(self.requester, userId, path, threadnum)
+        downloader.Handler()
+
+    # 下载相册摘要
+    def DownloadAlbumInfo(self, userIdList, path = 'albums', threadnum=20):
+        downloader = RenrenAlbumInfoGrabber(self.requester, userIdList, path, threadnum)
         downloader.Handler()
 
     # 自动下载所有好友相册
