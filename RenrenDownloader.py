@@ -22,6 +22,12 @@ def main():
     #     pass
 
     renren = SuperRenren()
+#    test
+#    renren.Create('18911029092', 'THUcst)(')
+#    renren.DownloadAlbumInfo(['415604935'], path = 'y:/info', threadnum = 7)
+#    print "?"
+#    raw_input()
+    
     f=open('user.txt')
     for username in f:
         print 'login using ' + username

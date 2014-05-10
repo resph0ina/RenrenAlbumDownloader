@@ -25,17 +25,7 @@ GlobalShelveMutex = threading.Lock()
 TaskListFilename = "TaskList.bin"
 
 # 避免urllib2永远不返回
-socket.setdefaulttimeout(10)
-
-    
-# 字符串形式的unicode转成真正的字符
-def Str2Uni(str):
-    import re
-    pat = re.compile(r'\\u(\w{4})')
-    lst = pat.findall(str)        
-    lst.insert(0, '')
-    return reduce(lambda x,y: x + unichr(int(y, 16)), lst)
-
+socket.setdefaulttimeout(20)
 
 class RenrenRequester:
     '''
@@ -455,12 +445,13 @@ class RenrenAlbumInfoGrabber:
         返回元组列表（相册名，相册地址，相册id，照片个数，缩略图网址列表）
         '''
         # print(rawHtml)
-        albumUrlPattern = re.compile(r'''<li>(.*?)photo-num.*?([0-9]+).*?</div></a>.*?<a href="(.*?)\?frommyphoto" class="album-title">.*?<span class="album-name">(.*?)</span>''', re.S)
-        thumbnailsPattern = re.compile(r'data-src="(.*?)"')
+        albumUrlPattern = re.compile(r'''<li>(.*?)photo-num">([0-9]+)</div>.*?href="(.*?)\?frommyphoto".*?<span class="album-name">(.*?)</span>''', re.S)
+        thumbnailsPattern = re.compile(r'url\((.*?)\)')
         AlbumidPattern = re.compile(r'album-(.*)')
 
         albums = []
         for thumbnailHtml, photonums, album_url, album_name in albumUrlPattern.findall(rawHtml):
+            print '!'
             thumbnails = thumbnailsPattern.findall(thumbnailHtml)
             album_name = album_name.strip()
             album_name = album_name.replace('<i class="privacy-icon picon-friend"></i>', '')
@@ -509,23 +500,22 @@ class RenrenAlbumInfoGrabber:
         download_tasks = []
 
         for userid in userIdList:
-            albumsUrl = "http://photo.renren.com/photo/%s/album/relatives" % userid
+            albumsUrl = "http://photo.renren.com/photo/%s/album/relatives/ajax?offset=0&limit=10000" % userid
             # print(albumsUrl)
             # 更新path
             path = os.path.join(path, userid)
             if self.__EnsureFolder(path) == True:
-                logger.info("Skipping.")
+                logger.info("Skipping.") # ...断点续传...
                 return download_tasks
 
 
             # 打开相册首页，以获取每个相册的地址以及名字
-            rawHtml, url = self.requester.Request(albumsUrl)            
+            rawHtml, url = self.requester.Request(albumsUrl)      
             rawHtml = unicode(rawHtml, "utf-8")
-            # print(rawHtml)
+#            print rawHtml.encode("gb18030")
 
             albums = self.__GetAlbumsInfoFromHtml(rawHtml)
-            # print(albums)
-
+#            print(albums)
 
             # 创建文件夹，以及下载任务
             for name, url, albumid, photos, thumbnails in albums:
