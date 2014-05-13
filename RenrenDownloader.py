@@ -6,6 +6,7 @@
 #
 # from imp import reload
 import sys
+import codecs
 # from setuptools.compat import execfile
 
 from Renren import SuperRenren
@@ -30,15 +31,21 @@ def main():
     
     f=open('user.txt')
     for username in f:
+        if username[0] == '#': continue
         print 'login using ' + username
         if renren.Create(username, 'THUcst)('):
-            list = renren.GetFriendList()
-            fi=open('y:/1.txt','a')
-            for l in list:
-                print l[0]
-                fi.write((l[0] + " " + l[1] + '\n').encode("utf-8"))
-                renren.DownloadAlbumInfo([l[0]], path = 'y:/info', threadnum = 7)
-            fi.close()
+            f2 = open('lc_filter.txt')
+            for l in f2:
+                renren.DownloadAlbum(l.strip(),'y:/albums',threadnum = 1)
+            # list = renren.GetFriendList()
+            # fi=open('y:/'+unicode(renren.requester.GetUserId())+'.txt','w')
+            # for l in list:
+            #     # print l[1].encode('gb18030')
+            #     fi.write(l[0] + " ")
+            #     fi.write(l[1])
+            #     fi.write('\n')
+            # fi.close()
+            # renren.DownloadAlbumInfo([i[0] for i in list], path = 'y:/info', threadnum = 7)
         else:
             print 'login failed.'
         # renren.PostMsg(time.asctime())

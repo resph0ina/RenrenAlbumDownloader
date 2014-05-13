@@ -5,6 +5,7 @@ from HTMLParser import HTMLParser
 from Queue import Empty, Queue
 from re import match
 from urllib import urlencode
+from opencv_face import face_detect
 import os, re, json, sys
 import threading, time
 import urllib, urllib2, socket
@@ -25,7 +26,7 @@ GlobalShelveMutex = threading.Lock()
 TaskListFilename = "TaskList.bin"
 
 # 避免urllib2永远不返回
-socket.setdefaulttimeout(20)
+socket.setdefaulttimeout(5)
 
 class RenrenRequester:
     '''
@@ -196,7 +197,7 @@ class RenrenFriendList:
         friendIdPattern = re.compile(r'"fid":(\d+).*?fgroup.*?,"fname":"(.*?)"')
         friendIdList = []
         for id in friendIdPattern.findall(friendInfoPack):
-            friendIdList.append((id[0], id[1].decode('unicode-escape')))
+            friendIdList.append((id[0], id[1].decode('unicode-escape').encode('utf-8')))
             # print(id)
         
         return friendIdList        
@@ -218,10 +219,11 @@ def DownloadImage(img_url, filename, requester = None):
             else:
                 resp = requester.opener.open(img_url)
             respHtml = resp.read();
-            binfile = open(filename+'.'+str(resp.info().getheader("Content-Type").split('/')[1]), "wb");
+            filename = filename+'.'+str(resp.info().getheader("Content-Type").split('/')[1])
+            binfile = open(filename, "wb");
             binfile.write(respHtml);
             binfile.close();
-            break
+            return filename
             # n, msg = urllib.urlretrieve(img_url, filename)
             # logger.info(n + " " + str(msg.type))
             # if "image" in msg.type: 
@@ -243,10 +245,15 @@ class RenrenAlbumDownloader2012:
             try:
                 while not self.queue.empty():
                     logger.info("Queue size: %d" % self.queue.qsize())
-                    img_url, filename = self.queue.get()
+                    img_url, filename = self.queue.get(block = False)
 
                     logger.info("Downloading %s." % filename)
-                    DownloadImage(img_url, filename)
+                    filename = DownloadImage(img_url, filename)
+                    rect = face_detect(filename)
+                    if len(rect) == 0:
+                        os.remove(filename)
+                    else:
+                        logger.info("Detected faces...")
             except: 
                 logger.error("Error occured in Downloader.", exc_info=True)
 
@@ -255,6 +262,7 @@ class RenrenAlbumDownloader2012:
         self.threadnum = threadnum
         self.userid = userid
         self.path = path
+        self.ownid = requester.GetUserId()
 
     def Handler(self):
         self.__DownloadOneAlbum(self.userid, self.path)
@@ -267,16 +275,19 @@ class RenrenAlbumDownloader2012:
         peopleName = peopleName[peopleName.rfind(' ') + 1:]
         return peopleName
 
-    def __GetAlbumsNameFromHtml(self, rawHtml):
+    def __GetAlbumsInfoFromHtml(self, rawHtml):
         '''获取相册名字以及地址
-
-        返回元组列表（相册名，地址）
+        返回元组列表（相册名，相册地址，相册id，照片个数，缩略图网址列表）
         '''
         # print(rawHtml)
-        albumUrlPattern = re.compile(r'''</div></a>.*?<a href="(.*?)\?frommyphoto" class="album-title">.*?<span class="album-name">(.*?)</span>''', re.S)
+        # raw_input()
+        albumUrlPattern = re.compile(r'''<li>(.*?)photo-num">([0-9]+)</div>.*?href="(.*?)\?frommyphoto".*?<span class="album-name">(.*?)</span>''', re.S)
+        thumbnailsPattern = re.compile(r'url\((.*?)\)')
+        AlbumidPattern = re.compile(r'album-(.*)')
 
         albums = []
-        for album_url, album_name in albumUrlPattern.findall(rawHtml):
+        for thumbnailHtml, photonums, album_url, album_name in albumUrlPattern.findall(rawHtml):
+            thumbnails = thumbnailsPattern.findall(thumbnailHtml)
             album_name = album_name.strip()
             album_name = album_name.replace('<i class="privacy-icon picon-friend"></i>', '')
             album_name = album_name.replace('<i class="privacy-icon picon-custom"></i>', '')
@@ -288,8 +299,9 @@ class RenrenAlbumDownloader2012:
                 continue
             elif album_name == '<span class="password">': # 有密码，跳过
                 continue
-            logger.info("album_url: [%s]  album_name: [%s]" % (album_url, album_name))
-            albums.append((album_name, album_url))
+            logger.info("album_url: [%s]  album_name: [%s] num: [%s]" % (album_url, album_name, photonums))
+            albumid = AlbumidPattern.findall(album_url)[0]
+            albums.append((album_name, album_url, albumid, photonums, thumbnails))
 
         return albums
 
@@ -311,7 +323,10 @@ class RenrenAlbumDownloader2012:
 
     def __EnsureFolder(self, path):
         if os.path.exists(path) == False:
-            os.mkdir(path)        
+            os.mkdir(path)
+            return False
+        else:
+            return True   
 
     def __NormFilename(self, filename):
         filename = re.sub(ur"[\t\r\n\\/:：*?<>|]", "", filename)
@@ -327,8 +342,11 @@ class RenrenAlbumDownloader2012:
         path = self.path
         path = path.decode('utf-8')
         self.__EnsureFolder(path)
+        rootpath = os.path.join(path, self.ownid)
+        rootpath = rootpath.decode('utf-8')
+        self.__EnsureFolder(rootpath)
         
-        albumsUrl = "http://photo.renren.com/photo/%s/album/relatives" % userid
+        albumsUrl = "http://photo.renren.com/photo/%s/album/relatives/ajax?offset=0&limit=10000" % userid
         # print(albumsUrl)
 
         # 打开相册首页，以获取每个相册的地址以及名字
@@ -336,46 +354,41 @@ class RenrenAlbumDownloader2012:
         rawHtml = unicode(rawHtml, "utf-8")
         # print(rawHtml)
 
-        # 取得人名
-        peopleName = self.__GetPeopleNameFromHtml(rawHtml).strip()
-        albums = self.__GetAlbumsNameFromHtml(rawHtml)
+        albums = self.__GetAlbumsInfoFromHtml(rawHtml)
         # print(albums)
 
-        # 更新path
-        peopleName = self.__NormFilename(peopleName)
-        path = os.path.join(path, peopleName)
-        self.__EnsureFolder(path)
+        # 更新path 欲下载的目标的用户id
+        path = os.path.join(rootpath, userid)
+        if self.__EnsureFolder(path) == True:
+            pass
+#                logger.info("Skipping user...") # ...断点续传...
+#                return download_tasks
 
-        logger.info(peopleName)
-
+        albumfile = open(os.path.join(path,'album_name.txt'),'w')
         album_img_dict = {}
 
-        # 构造dict[相册名]=img_urls的字典
-        for album_name, album_url in albums:
-            logger.info("album_name: %s  album_url: %s" % (album_name, album_url))
-            # print("album_name: %s  album_url: %s" % (album_name, album_url))
+        # 构造dict[相册id]=img_urls的字典
+        for name, url, albumid, photos, thumbnails in albums:
+            logger.info('Getting imgurls for: ' + name + ' ' + str(albumid))
+            album_img_dict[albumid] = self.__GetImgUrlsInAlbum(url)
+            albumfile.write(str(albumid) + ' ' + name.encode('utf-8') + '\n')
 
-            album_name = self.__NormFilename(album_name)
-            album_img_dict[album_name] = self.__GetImgUrlsInAlbum(album_url)
+        albumfile.close()
 
         # 创建文件夹，以及下载任务 
         download_tasks = []
         for album_name, img_urls in album_img_dict.iteritems():
             album_path = os.path.join(path, album_name)
             logger.info("Create %s if not exists." % album_path)
-            self.__EnsureFolder(album_path)
+            if self.__EnsureFolder(album_path) == True:
+                pass
+                logger.info("Skipping album...") # ...断点续传...
+                continue
 
-            index = 1
-            name_set = set()
+            index = 0
             for alt, img_url in img_urls:
-                name = self.__NormFilename(alt)
-                if not name:
-                    name = str(index)
-                    index += 1
-                while name in name_set:
-                    name += "I"
-                name_set.add(name)
-                filename = os.path.join(album_path, name + ".jpg")
+                index += 1
+                filename = os.path.join(album_path, str(index))
                 download_tasks.append((img_url, filename))
 
         logger.info("Download Tasks size: %d." % len(download_tasks))
@@ -395,7 +408,6 @@ class RenrenAlbumDownloader2012:
             threads.append(downloader)
 
         for i, t in enumerate(threads):
-            logger.info("Thread %d ended" % i)
             t.join() 
 
         logger.info("All Thread terminated")
@@ -451,7 +463,6 @@ class RenrenAlbumInfoGrabber:
 
         albums = []
         for thumbnailHtml, photonums, album_url, album_name in albumUrlPattern.findall(rawHtml):
-            print '!'
             thumbnails = thumbnailsPattern.findall(thumbnailHtml)
             album_name = album_name.strip()
             album_name = album_name.replace('<i class="privacy-icon picon-friend"></i>', '')
@@ -493,9 +504,9 @@ class RenrenAlbumInfoGrabber:
         path = self.path
         path = path.decode('utf-8')
         self.__EnsureFolder(path)
-        path = os.path.join(path, self.ownid)
-        path = path.decode('utf-8')
-        self.__EnsureFolder(path)
+        rootpath = os.path.join(path, self.ownid)
+        rootpath = rootpath.decode('utf-8')
+        self.__EnsureFolder(rootpath)
         
         download_tasks = []
 
@@ -503,10 +514,11 @@ class RenrenAlbumInfoGrabber:
             albumsUrl = "http://photo.renren.com/photo/%s/album/relatives/ajax?offset=0&limit=10000" % userid
             # print(albumsUrl)
             # 更新path
-            path = os.path.join(path, userid)
+            path = os.path.join(rootpath, userid)
             if self.__EnsureFolder(path) == True:
-                logger.info("Skipping.") # ...断点续传...
-                return download_tasks
+				pass
+#                logger.info("Skipping user...") # ...断点续传...
+#                return download_tasks
 
 
             # 打开相册首页，以获取每个相册的地址以及名字
@@ -521,7 +533,10 @@ class RenrenAlbumInfoGrabber:
             for name, url, albumid, photos, thumbnails in albums:
                 name = self.__NormFilename(name)
                 album_path = os.path.join(path, albumid + " " + name)
-                self.__EnsureFolder(album_path)
+                if self.__EnsureFolder(album_path) == True:
+					pass
+					logger.info("Skipping album...") # ...断点续传...
+					continue
 
                 index = 1
                 for img_url in thumbnails:
