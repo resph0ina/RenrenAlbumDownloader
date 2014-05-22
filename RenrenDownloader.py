@@ -23,20 +23,26 @@ def main():
     #     pass
 
     renren = SuperRenren()
-#    test
-#    renren.Create('18911029092', 'THUcst)(')
-#    renren.DownloadAlbumInfo(['415604935'], path = 'y:/info', threadnum = 7)
-#    print "?"
-#    raw_input()
+    renren.Create('18911029092', 'THUcst)(')
+    # renren.DownloadAlbumInfo(['415604935'], path = 'y:/info', threadnum = 7)
+    data = renren.GetRelationship()
+    fi=open('y:/'+unicode(renren.requester.GetUserId())+'.txt','w')
+    for item in data:
+        fi.write(str(item['id']) + " " + item['name'] + "\n")
+        for i in item['friends']:
+            fi.write('\t' + str(i[0]) + " " + i[1] + '\n')
+    fi.close()
+    print 'done'
+    raw_input()
     
     f=open('user.txt')
     for username in f:
         if username[0] == '#': continue
         print 'login using ' + username
         if renren.Create(username, 'THUcst)('):
-            f2 = open('lc_filter.txt')
+            f2 = open('2.txt')
             for l in f2:
-                renren.DownloadAlbum(l.strip(),'y:/albums',threadnum = 1)
+                renren.DownloadAlbum(l.strip(),'y:/albums',threadnum = 10)
             # list = renren.GetFriendList()
             # fi=open('y:/'+unicode(renren.requester.GetUserId())+'.txt','w')
             # for l in list:

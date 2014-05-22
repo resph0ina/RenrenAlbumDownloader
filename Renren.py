@@ -14,10 +14,15 @@ import logging, logging.handlers
 
 def get_logger(handler = logging.StreamHandler()):
     import logging
+    LOG_FILE = './run.log'
+
+    filehandler = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes = 1024*1024, backupCount = 5)
     logger = logging.getLogger()
     formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
     handler.setFormatter(formatter)
+    filehandler.setFormatter(formatter)
     logger.addHandler(handler)
+    logger.addHandler(filehandler)    
     logger.setLevel(logging.NOTSET)
     return logger
 
@@ -26,7 +31,7 @@ GlobalShelveMutex = threading.Lock()
 TaskListFilename = "TaskList.bin"
 
 # 避免urllib2永远不返回
-socket.setdefaulttimeout(5)
+socket.setdefaulttimeout(20)
 
 class RenrenRequester:
     '''
@@ -58,6 +63,8 @@ class RenrenRequester:
     
     # 输入用户和密码的元组
     def Create(self, username, password):
+        self.username = username
+        self.password = password
         logger.info("Trying to login by password")
         loginData = {'email':username,
                 'password':password,
@@ -90,8 +97,24 @@ class RenrenRequester:
         try:
             self.userid = useridPattern.search(rawHtml).group(1)
         except:
-            print('Failed...')
-            return False
+            # GOD DAMN V7!
+            v7Pattern = re.compile(r'id : \"(\d+?)\"')
+            try:
+                self.userid = v7Pattern.search(rawHtml).group(1)
+                v7TokenPattern = re.compile(r'requestToken : \'(\d+?)\'')
+                v7RtkPattern = re.compile(r'_rtk : \'(.*?)\'')
+                self.uiVersion = 'v7'
+                self.requestToken = v7TokenPattern.findall(rawHtml)[0]
+                self._rtk = v7RtkPattern.findall(rawHtml)[0]
+
+                logger.info('Login renren.com(v7) successfully.')
+                logger.info("userid: %s, token: %s, rtk: %s" % (self.userid, self.requestToken, self._rtk))
+                self.__isLogin = True      
+                return self.__isLogin
+            except Exception, e:
+                raise e
+                print('Failed...')
+                return False
         # 查找requestToken
         pos = rawHtml.find("get_check:'")
         if pos == -1: return False        
@@ -203,6 +226,46 @@ class RenrenFriendList:
         return friendIdList        
     
 
+class RenrenRelationship:
+    '''
+    RenrenFriendList
+        人人好友关系抓取
+        return: [{'id':, 'name':, 'friends':[(id,name)]}]
+    '''
+    def Handler(self, requester):  
+        self.requester = requester
+        friendIdList = self.__GetFriendList(self.requester.userid)
+        data = []
+        length = len(friendIdList)
+        index = 1
+        for item in friendIdList:
+            print item[0], ' (%d,%d)' % (index, length)
+            index += 1
+            di = {}
+            di['id'] = item[0]; di['name'] = item[1]
+            di['friends'] = self.__GetFriendList(item[0])
+            data.append(di)
+        return data  
+
+    def __GetFriendList(self, id):
+        try:
+            url = 'http://friend.renren.com/GetFriendList.do?curpage=%d&id=%s'
+            rawHtml = self.requester.Request(url % (0, str(id)))[0]
+            # print rawHtml
+            getPagePattern = re.compile(r'<span class="break">.*?curpage=(\d+)',re.S)
+            pages = getPagePattern.findall(rawHtml)[0]
+            # print pages
+            getFriendPattern = re.compile(r'<dd><a href.*?\?id=(\d+?)\">(.*?)</a>')
+            friendsList = []
+            for i in xrange(0,int(pages)+1):
+                rawHtml = self.requester.Request(url % (i, str(id)))[0]
+                # rawHtml = rawHtml.decode('utf-8')
+                friendsList.extend(getFriendPattern.findall(rawHtml))
+            return friendsList
+        except Exception, e:
+            logger.error('GetFriendList failed.')
+    
+
 def DownloadImage(img_url, filename, requester = None):
     count = 0
     # Retry until we get the right picture.
@@ -249,11 +312,11 @@ class RenrenAlbumDownloader2012:
 
                     logger.info("Downloading %s." % filename)
                     filename = DownloadImage(img_url, filename)
-                    rect = face_detect(filename)
-                    if len(rect) == 0:
-                        os.remove(filename)
-                    else:
-                        logger.info("Detected faces...")
+                    # rect = face_detect(filename)
+                    # if len(rect) == 0:
+                    #     os.remove(filename)
+                    # else:
+                    #     logger.info("Detected faces...")
             except: 
                 logger.error("Error occured in Downloader.", exc_info=True)
 
@@ -357,35 +420,46 @@ class RenrenAlbumDownloader2012:
         albums = self.__GetAlbumsInfoFromHtml(rawHtml)
         # print(albums)
 
+        try_count = 0
+        while len(albums) == 0:
+            logger.error("Empty album!")
+            self.requester.Create(self.requester.username, self.requester.password)
+            rawHtml, url = self.requester.Request(albumsUrl)            
+            rawHtml = unicode(rawHtml, "utf-8")
+            albums = self.__GetAlbumsInfoFromHtml(rawHtml)
+            try_count+=1
+            if try_count == 4:
+                break
+
+        if len(albums) == 0:
+            logger.error("Empty album Empty album")
+            sys.exit(1)
+
         # 更新path 欲下载的目标的用户id
         path = os.path.join(rootpath, userid)
         if self.__EnsureFolder(path) == True:
             pass
 #                logger.info("Skipping user...") # ...断点续传...
 #                return download_tasks
-
+        
+        #dump album name file
         albumfile = open(os.path.join(path,'album_name.txt'),'w')
-        album_img_dict = {}
-
-        # 构造dict[相册id]=img_urls的字典
         for name, url, albumid, photos, thumbnails in albums:
             logger.info('Getting imgurls for: ' + name + ' ' + str(albumid))
-            album_img_dict[albumid] = self.__GetImgUrlsInAlbum(url)
             albumfile.write(str(albumid) + ' ' + name.encode('utf-8') + '\n')
-
         albumfile.close()
 
         # 创建文件夹，以及下载任务 
         download_tasks = []
-        for album_name, img_urls in album_img_dict.iteritems():
-            album_path = os.path.join(path, album_name)
-            logger.info("Create %s if not exists." % album_path)
+        for name, url, albumid, photos, thumbnails in albums:
+            album_path = os.path.join(path, str(albumid))
             if self.__EnsureFolder(album_path) == True:
                 pass
                 logger.info("Skipping album...") # ...断点续传...
                 continue
 
             index = 0
+            img_urls = self.__GetImgUrlsInAlbum(url)
             for alt, img_url in img_urls:
                 index += 1
                 filename = os.path.join(album_path, str(index))
@@ -685,6 +759,10 @@ class SuperRenren:
     def GetFriendList(self): 
         friendsList = RenrenFriendList().Handler(self.requester, None)
         return friendsList
+
+    def GetRelationship(self):
+        relationDict = RenrenRelationship().Handler(self.requester)
+        return relationDict
 
     # 下载相册
     def DownloadAlbum(self, userId, path = 'albums', threadnum=20):       
